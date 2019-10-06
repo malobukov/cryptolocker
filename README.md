@@ -1,6 +1,6 @@
 # cryptolocker
 
-Encrypts or decrypts given file or all files in a given folder, recursively. 
+Encrypts or decrypts a given file or all files in a given folder, recursively. 
 
 ## Usage
 
