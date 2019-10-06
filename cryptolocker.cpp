@@ -77,7 +77,7 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   for (unsigned i = 0; i < total_notches; i++) {
     std::cerr << "▒"; // U+2592 Medium shade
   }
-  std::cerr << "]\r";
+  std::cerr << "]\r[";
   unsigned notches_shown = 0;
 
   uint64_t nonce_and_counter[2] = { length, 0 };
@@ -86,9 +86,9 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   char buffer[16];
   while (remaining_length) {
 
-  	// Advance the keystream
-  	speck_encrypt(nonce_and_counter, key, keystream);
-  	nonce_and_counter[1]++;
+    // Advance the keystream
+    speck_encrypt(nonce_and_counter, key, keystream);
+    nonce_and_counter[1]++;
 
     // Remember current position, read next chunk, move file pointer back
     auto position = f.tellg();
