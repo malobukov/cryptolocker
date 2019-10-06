@@ -92,7 +92,7 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
 
     // Remember current position, read next chunk, move file pointer back
     auto position = f.tellg();
-  	std::uintmax_t chunk_size = remaining_length < 16 ? remaining_length : 16;
+    std::uintmax_t chunk_size = remaining_length < 16 ? remaining_length : 16;
     f.read(&buffer[0], chunk_size);
     if (!f.good()) {
       std::cerr << "Error reading " << path << "\n";
