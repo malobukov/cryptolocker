@@ -6,6 +6,10 @@
 //
 //   sudo apt-get install gcc-8 g++-8
 //
+// Building:
+//
+//   g++-8 -O3 -Wall -Wextra -std=c++17 -march=native -g -o cryptolocker cryptolocker.cpp -lstdc++fs
+//
 // Applies Speck128/256 in CTR mode, as a stream cipher, using file length as nonce.
 // This can potentially be a problem, as encrypting two files of the same size with 
 // the same key leaks their XOR, but should be ok for the intended use: occasionally 
@@ -15,6 +19,8 @@
 //
 // Byte order and test vectors as in Speck implementation guide 
 // https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
+//
+// Skips files that have "cryptolocker" in path to avoid encrypting itself.
 //
 #include <cstdint>
 #include <cstdlib>
@@ -62,6 +68,10 @@ bytes_to_uint64(const uint8_t bytes[], unsigned length)
 static int // Return 0 on success
 process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64_t key[4])
 {
+  if (path.string().find("cryptolocker") != std::string::npos) { // Do not encrypt itself
+    std::cerr << "Skipping " << path << "\n";
+  	return 0;
+  }
   std::cerr << "Processing " << path << "\n";
   std::fstream f(path, std::fstream::in | std::fstream::out | std::fstream::binary);
   if (!f.is_open()) {
@@ -87,13 +97,13 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   char buffer[16];
   while (remaining_length) {
 
-    // Advance the keystream
-    speck_encrypt(nonce_and_counter, key, keystream);
-    nonce_and_counter[1]++;
+  	// Advance the keystream
+  	speck_encrypt(nonce_and_counter, key, keystream);
+  	nonce_and_counter[1]++;
 
     // Remember current position, read next chunk, move file pointer back
     auto position = f.tellg();
-    std::uintmax_t chunk_size = remaining_length < 16 ? remaining_length : 16;
+  	std::uintmax_t chunk_size = remaining_length < 16 ? remaining_length : 16;
     f.read(&buffer[0], chunk_size);
     if (!f.good()) {
       std::cerr << "Error reading " << path << "\n";
@@ -146,7 +156,7 @@ int main(int argc, char** argv)
 
   // When called without filename(s), run self-test using published test vectors and show usage
   if (argc <= start_with) {
-    const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
+  	const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
                                   , 0x1716151413121110ULL, 0x1f1e1d1c1b1a1918ULL };
     const uint64_t plaintext[2] = { 0x202e72656e6f6f70ULL, 0x65736f6874206e49ULL };
     const uint64_t expected[2]  = { 0x4eeeb48d9c188f43ULL, 0x4109010405c0f53eULL };
