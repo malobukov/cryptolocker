@@ -8,6 +8,8 @@ Encrypts or decrypts a given file or all files in a given folder, recursively.
 
 More than one file or folder can be specified. Returns 0 on success. Running the same command on encrypted file decrypts it.
 
+Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD, in which case all command-line arguments are interpreted as file or folder names.
+
 ## Building
 
 Written in C++ using some C++17 features, so requires at least GCC 8:
