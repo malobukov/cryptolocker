@@ -17,6 +17,7 @@
 // https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
 //
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream> 
@@ -73,11 +74,11 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   auto remaining_length = length;
   while (remaining_length >>= 1) total_notches++;
   remaining_length = length;
-  std::cerr << "[";
+  std::cerr << " ";
   for (unsigned i = 0; i < total_notches; i++) {
     std::cerr << "▒"; // U+2592 Medium shade
   }
-  std::cerr << "]\r";
+  std::cerr << " \r ";
   unsigned notches_shown = 0;
 
   uint64_t nonce_and_counter[2] = { length, 0 };
@@ -117,7 +118,7 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
     remaining_length -= chunk_size;
 
     // Update progress bar if needed 
-    auto notches_remaining = (unsigned)((double)remaining_length * total_notches / length);
+    auto notches_remaining = total_notches - (unsigned)(((double)length - remaining_length) * total_notches / length);
     if (total_notches - notches_shown > notches_remaining) {
       auto notches_to_show = total_notches - notches_shown - notches_remaining;
       while (notches_to_show--) {
@@ -135,10 +136,16 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   return 0;
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char** argv)
 {
-  // When called without arguments, run self-test using published test vectors and show usage
-  if (argc < 3) {
+  int start_with = 1; // filenames start from argv[1]
+  char* password = std::getenv("CRYPTOLOCKER_PASSWORD");
+  if (!password) {
+    start_with = 2; // filenames start from argv[2]
+  }
+
+  // When called without filename(s), run self-test using published test vectors and show usage
+  if (argc <= start_with) {
   	const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
                                   , 0x1716151413121110ULL, 0x1f1e1d1c1b1a1918ULL };
     const uint64_t plaintext[2] = { 0x202e72656e6f6f70ULL, 0x65736f6874206e49ULL };
@@ -164,32 +171,43 @@ int main(int argc, char* argv[])
        return 1;
     }
   	std::cerr << "Usage:\n\n\tcryptolocker password file\n\n"
-  	  "Encrypt or decrypt given file or all files in a given directory recursively with Speck128/256 in counter mode\n";
+  	  "Encrypt or decrypt given file or all files in a given directory recursively with Speck128/256 in counter mode. "
+      "Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD, in which case all command-line "
+      "arguments are interpreted as file or folder names.\n";
   	return 0;
+  }
+
+  if (start_with == 2) {
+    password = argv[1];
   }
 
   // Convert password to four little-endian 64-bit words, zero padded,
   // as in BytesToWords64() from implementation guide 
   uint64_t k[4] = {0};
-  unsigned bytes_left = strlen(argv[1]);
+  unsigned bytes_left = strlen(password);
   if (bytes_left < 16) {
     std::cerr << "WARNING: password is less than 16 characters long\n";
   } else if (bytes_left > 32) {
     std::cerr << "WARNING: password is longer than 32 characters, only using the first 32\n";
   }
   for (unsigned i = 0; i < 4; i++, bytes_left -= 8) {
-    k[i] = bytes_to_uint64((uint8_t*)&argv[1][i * 8], bytes_left > 8 ? 8 : bytes_left);
+    k[i] = bytes_to_uint64((uint8_t*)(password + i * 8), bytes_left > 8 ? 8 : bytes_left);
     if (bytes_left <= 8) break;
   }
 
+  // Replace password with stars so that it does not appear in process list
+  if (start_with == 2) {
+    while (*password) *password++ = '*'; 
+  }
+
   // Iterate over the given files or folders (can be more than one)
-  for (int i = 2; i < argc; i++) {
-    auto p = std::filesystem::path(argv[2]);
+  for (int i = start_with; i < argc; i++) {
+    auto p = std::filesystem::path(argv[i]);
   	auto s = std::filesystem::status(p);
     if (std::filesystem::is_regular_file(s)) {
       if (process_one_file(p, std::filesystem::file_size(p), k)) return 1;
     } else if (std::filesystem::is_directory(s)) {
-      for (auto& q: std::filesystem::recursive_directory_iterator(argv[2])) {
+      for (auto& q: std::filesystem::recursive_directory_iterator(argv[i])) {
       	if (q.is_regular_file()) {
           if (process_one_file(q.path(), q.file_size(), k)) return 1;
         }
