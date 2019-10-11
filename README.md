@@ -6,7 +6,7 @@ Encrypts or decrypts a given file or all files in a given folder, recursively.
 
     cryptolocker password file_or_folder_name
 
-More than one file or folder can be specified. Returns 0 on success. Running the same command on encrypted file decrypts it.
+More than one file or folder can be specified. Returns 0 on success. Running the same command on encrypted file decrypts it. Does not change files that have "cryptolocker" in path to avoid encrypting itself.
 
 Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD, in which case all command-line arguments are interpreted as file or folder names.
 
