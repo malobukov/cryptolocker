@@ -1,14 +1,10 @@
 // cryptolocker.cpp
 //
-// Encrypts or decrypts given file(s) or all files in a given folder, recursively
-//
-// Prerequisites:
-//
-//   sudo apt-get install gcc-8 g++-8
+// Encrypts or decrypts given file or files
 //
 // Building:
 //
-//   g++-8 -O3 -Wall -Wextra -std=c++17 -march=native -g -o cryptolocker cryptolocker.cpp -lstdc++fs
+//   g++ -O3 -Wall -Wextra -std=c++11 -march=native -g -o cryptolocker cryptolocker.cpp
 //
 // Applies Speck128/256 in CTR mode, as a stream cipher, using file length as nonce.
 // This can potentially be a problem, as encrypting two files of the same size with 
@@ -20,22 +16,19 @@
 // Byte order and test vectors as in Speck implementation guide 
 // https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
 //
-// Skips files that have "cryptolocker" in path to avoid encrypting itself.
-//
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <fstream> 
 #include <iostream>
 
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
-  x = (x >> 8) | (x << (8 * sizeof(x) - 8)); // x = ROTR(x, 8)
+  x = (x >> 8) | (x << (64 - 8)); // x = ROTR(x, 8)
   x += y;
   x ^= k;
-  y = (y << 3) | (y >> (8 * sizeof(y) - 3)); // y = ROTL(y, 3)
+  y = (y << 3) | (y >> (64 - 3)); // y = ROTL(y, 3)
   y ^= x;
 }
 
@@ -66,18 +59,21 @@ bytes_to_uint64(const uint8_t bytes[], unsigned length)
 }
 
 static int // Return 0 on success
-process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64_t key[4])
+process_one_file(const char* filename, const uint64_t key[4])
 {
-  if (path.string().find("cryptolocker") != std::string::npos) { // Do not encrypt itself
-    std::cout << "Skipping " << path << "\n";
-  	return 0;
-  }
-  std::cout << "Processing " << path << "\n";
-  std::fstream f(path, std::fstream::in | std::fstream::out | std::fstream::binary);
+  std::cout << "Processing " << filename << "\n";
+  std::fstream f(filename, std::fstream::in | std::fstream::out | std::fstream::binary);
   if (!f.is_open()) {
-    std::cerr << "Cannot open " << path << "\n";
+    std::cerr << "Cannot open " << filename << "\n";
     return 1;
   }
+
+  // Determmine file length to use as nonce
+  const auto begin = f.tellg();
+  f.seekg (0, std::ios::end);
+  const auto end = f.tellg();
+  f.seekg (0);
+  const auto length = (end - begin);
 
   // Make progress bar length proportional to log of file size, plus intercept
   unsigned total_notches = 10;
@@ -91,7 +87,7 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   std::cerr << " \r ";
   unsigned notches_shown = 0;
 
-  uint64_t nonce_and_counter[2] = { length, 0 };
+  uint64_t nonce_and_counter[2] = { (uint64_t)length, 0 };
   uint64_t keystream[2];
 
   char buffer[16];
@@ -106,7 +102,7 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
   	std::uintmax_t chunk_size = remaining_length < 16 ? remaining_length : 16;
     f.read(&buffer[0], chunk_size);
     if (!f.good()) {
-      std::cerr << "Error reading " << path << "\n";
+      std::cerr << "\nError reading " << filename << "\n";
       return 1;
     }
     f.seekg(position);
@@ -121,7 +117,7 @@ process_one_file(std::filesystem::path path, std::uintmax_t length, const uint64
     // Write processed buffer back
     f.write(&buffer[0], chunk_size);
     if (!f.good()) {
-      std::cerr << "Error writing " << path << "\n";
+      std::cerr << "\nError writing " << filename << "\n";
       return 1;
     }
 
@@ -180,15 +176,17 @@ int main(int argc, char** argv)
                 << "Observed 0x" << converted[0] << ", 0x" << converted[1] << "\n";
        return 1;
     }
-  	std::cerr << "Usage:\n\n\tcryptolocker password file\n\n"
-  	  "Encrypt or decrypt given file or all files in a given directory recursively with Speck128/256 in counter mode. "
-      "Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD, in which case all command-line "
-      "arguments are interpreted as file or folder names.\n";
+  	std::cerr << "Usage:\n\n\tcryptolocker [password] file1 [file2] [...]\n\n"
+  	  "Encrypt or decrypt given file or files with Speck128/256 in counter mode.\n"
+      "Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD,\n"
+      "in which case all command-line arguments are interpreted as file names.\n";
   	return 0;
   }
 
   if (start_with == 2) {
     password = argv[1];
+  } else {
+    std::cerr << "Using password from environment variable\n";
   }
 
   // Convert password to four little-endian 64-bit words, zero padded,
@@ -210,27 +208,13 @@ int main(int argc, char** argv)
     while (*password) *password++ = '*'; 
   }
 
-  // Iterate over the given files or folders (can be more than one)
+  // Iterate over the given files (can be more than one)
   unsigned ok_ct = 0, fail_ct = 0;
   for (int i = start_with; i < argc; i++) {
-    auto p = std::filesystem::path(argv[i]);
-  	auto s = std::filesystem::status(p);
-    if (std::filesystem::is_regular_file(s)) {
-      if (process_one_file(p, std::filesystem::file_size(p), k)) {
-      	fail_ct++;
-      } else {
-        ok_ct++;
-      }
-    } else if (std::filesystem::is_directory(s)) {
-      for (auto& q: std::filesystem::recursive_directory_iterator(argv[i])) {
-      	if (q.is_regular_file()) {
-          if (process_one_file(q.path(), q.file_size(), k)) {
-          	fail_ct++;
-          } else {
-          	ok_ct++;
-          }
-        }
-      }
+    if (process_one_file(argv[i], k)) {
+      fail_ct++;
+    } else {
+      ok_ct++;
     }
   }
   std::cerr << ok_ct << " files(s), " << fail_ct << " errors\n";
