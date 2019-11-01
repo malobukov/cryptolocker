@@ -1,6 +1,6 @@
 // cryptolocker.cpp
 //
-// Encrypts or decrypts given file or files
+// Encrypts or decrypts a given file or files
 //
 // Building:
 //
@@ -21,31 +21,77 @@
 #include <cstring>
 #include <fstream> 
 #include <iostream>
+#include <x86intrin.h>
 
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
-  x = (x >> 8) | (x << (64 - 8)); // x = ROTR(x, 8)
+  x = __rorq(x, 8);
   x += y;
   x ^= k;
-  y = (y << 3) | (y >> (64 - 3)); // y = ROTL(y, 3)
+  y = __rolq(y, 3);
   y ^= x;
 }
 
 static void 
-speck_encrypt( const uint64_t plaintext[2]
-             , const uint64_t key[4]
-             , uint64_t ciphertext[2]
-             )
+speck_schedule( const uint64_t key[4]
+              , uint64_t schedule[34]
+              )
 {
   uint64_t a = key[0];
   uint64_t bcd[3] = {key[1], key[2], key[3]};
+  for (unsigned i = 0; i < 33; i++) {
+    schedule[i] = a; 
+    speck_round(bcd[i % 3], a, i);
+  }
+  schedule[33] = a; 
+}
+
+static void 
+speck_encrypt( const uint64_t plaintext[2]
+             , const uint64_t schedule[34]
+             , uint64_t ciphertext[2]
+             )
+{
   ciphertext[0] = plaintext[0];
   ciphertext[1] = plaintext[1];
   for (unsigned i = 0; i < 34; i++) {
-    speck_round(ciphertext[1], ciphertext[0], a); 
-    speck_round(bcd[i % 3], a, i);
+    speck_round(ciphertext[1], ciphertext[0], schedule[i]); 
   }
+}
+
+static void 
+speck_encrypt4( const uint64_t plaintext[2 * 4]
+              , const uint64_t schedule[34]
+              , uint64_t ciphertext[2 * 4]
+              )
+{
+  #ifdef __AVX2__
+    auto x = _mm256_set_epi64x(plaintext[7], plaintext[6], plaintext[5], plaintext[4]);
+    auto y = _mm256_set_epi64x(plaintext[3], plaintext[2], plaintext[1], plaintext[0]);
+    for (unsigned i = 0; i < 34; i++) {
+      auto si = schedule[i];
+      x = _mm256_or_si256(_mm256_srli_epi64(x, 8), _mm256_slli_epi64(x, 64 - 8)); // rotate x right by 8
+      x = _mm256_add_epi64(x, y);
+      x = _mm256_xor_si256(x, _mm256_set_epi64x(si, si, si, si));
+      y = _mm256_or_si256(_mm256_slli_epi64(y, 3), _mm256_srli_epi64(y, 64 - 3)); // rotate y left by 3
+      y = _mm256_xor_si256(y, x);
+    }
+    _mm256_storeu_si256((__m256i_u*)&ciphertext[4], x);
+    _mm256_storeu_si256((__m256i_u*)&ciphertext[0], y);
+  #else
+    ciphertext[0] = plaintext[0]; ciphertext[1] = plaintext[1];
+    ciphertext[2] = plaintext[2]; ciphertext[3] = plaintext[3];
+    ciphertext[4] = plaintext[4]; ciphertext[5] = plaintext[5];
+    ciphertext[6] = plaintext[6]; ciphertext[7] = plaintext[7];
+    for (unsigned i = 0; i < 34; i++) {
+      auto si = schedule[i];
+      speck_round(ciphertext[4], ciphertext[0], si); 
+      speck_round(ciphertext[5], ciphertext[1], si); 
+      speck_round(ciphertext[6], ciphertext[2], si); 
+      speck_round(ciphertext[7], ciphertext[3], si); 
+    }
+  #endif
 }
 
 static uint64_t 
@@ -59,7 +105,7 @@ bytes_to_uint64(const uint8_t bytes[], unsigned length)
 }
 
 static int // Return 0 on success
-process_one_file(const char* filename, const uint64_t key[4])
+process_one_file(const char* filename, const uint64_t schedule[34])
 {
   std::cout << "Processing " << filename << "\n";
   std::fstream f(filename, std::fstream::in | std::fstream::out | std::fstream::binary);
@@ -87,19 +133,20 @@ process_one_file(const char* filename, const uint64_t key[4])
   std::cerr << " \r ";
   unsigned notches_shown = 0;
 
-  uint64_t nonce_and_counter[2] = { (uint64_t)length, 0 };
-  uint64_t keystream[2];
+  uint64_t nonce_and_counter[2 * 4] = { 
+    (uint64_t)length, (uint64_t)length, (uint64_t)length, (uint64_t)length, 
+    0, 1, 2, 3};
 
-  char buffer[16];
   while (remaining_length) {
 
-  	// Advance the keystream
-    speck_encrypt(nonce_and_counter, key, keystream);
-    nonce_and_counter[1]++;
+    char buffer[16 * 4 * 1024];
+    std::uintmax_t chunk_size = remaining_length;
+    if (chunk_size > sizeof(buffer)) {
+      chunk_size = sizeof(buffer);
+    }
 
     // Remember current position, read next chunk, move file pointer back
     auto position = f.tellg();
-  	std::uintmax_t chunk_size = remaining_length < 16 ? remaining_length : 16;
     f.read(&buffer[0], chunk_size);
     if (!f.good()) {
       std::cerr << "\nError reading " << filename << "\n";
@@ -107,11 +154,28 @@ process_one_file(const char* filename, const uint64_t key[4])
     }
     f.seekg(position);
 
-    // XOR buffer with keystream
-    // Same byte order as in Words64ToBytes() from implementation guide
-    for (unsigned i = 0; i < 8; i++) {
-      buffer[i] ^= keystream[0] >> (i * 8);
-      buffer[i + 8] ^= keystream[1] >> (i * 8);
+    for (unsigned offset = 0; offset < chunk_size; offset += 16 * 4) {
+
+      // Get more of the keystream
+      uint64_t keystream[2 * 4];
+      speck_encrypt4(nonce_and_counter, schedule, keystream);
+      nonce_and_counter[4] += 4;
+      nonce_and_counter[5] += 4;
+      nonce_and_counter[6] += 4;
+      nonce_and_counter[7] += 4;
+
+      // XOR buffer with keystream
+      // Same byte order as in Words64ToBytes() from implementation guide
+      for (unsigned i = 0; i < 8; i++) {
+        buffer[offset + i + 0 * 8] ^= keystream[0] >> (i * 8);
+        buffer[offset + i + 1 * 8] ^= keystream[4] >> (i * 8);
+        buffer[offset + i + 2 * 8] ^= keystream[1] >> (i * 8);
+        buffer[offset + i + 3 * 8] ^= keystream[5] >> (i * 8);
+        buffer[offset + i + 4 * 8] ^= keystream[2] >> (i * 8);
+        buffer[offset + i + 5 * 8] ^= keystream[6] >> (i * 8);
+        buffer[offset + i + 6 * 8] ^= keystream[3] >> (i * 8);
+        buffer[offset + i + 7 * 8] ^= keystream[7] >> (i * 8);
+      }
     }
 
     // Write processed buffer back
@@ -120,7 +184,6 @@ process_one_file(const char* filename, const uint64_t key[4])
       std::cerr << "\nError writing " << filename << "\n";
       return 1;
     }
-
     remaining_length -= chunk_size;
 
     // Update progress bar if needed 
@@ -156,8 +219,10 @@ int main(int argc, char** argv)
                                   , 0x1716151413121110ULL, 0x1f1e1d1c1b1a1918ULL };
     const uint64_t plaintext[2] = { 0x202e72656e6f6f70ULL, 0x65736f6874206e49ULL };
     const uint64_t expected[2]  = { 0x4eeeb48d9c188f43ULL, 0x4109010405c0f53eULL };
+    uint64_t schedule[34];
+    speck_schedule(key, schedule);
     uint64_t observed[2];
-    speck_encrypt(plaintext, key, observed);
+    speck_encrypt(plaintext, schedule, observed);
     if ( expected[0] != observed[0] 
       || expected[1] != observed[1]
        ) {
@@ -208,10 +273,14 @@ int main(int argc, char** argv)
     while (*password) *password++ = '*'; 
   }
 
+  // Prepare key schedule
+  uint64_t schedule[34];
+  speck_schedule(k, schedule);
+
   // Iterate over the given files (can be more than one)
   unsigned ok_ct = 0, fail_ct = 0;
   for (int i = start_with; i < argc; i++) {
-    if (process_one_file(argv[i], k)) {
+    if (process_one_file(argv[i], schedule)) {
       fail_ct++;
     } else {
       ok_ct++;
