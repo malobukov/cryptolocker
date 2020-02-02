@@ -32,6 +32,16 @@ Speck cipher was developed by NSA and its release coincided with Snowden revelat
 
 Best practice is to use a cryptographic library instead of rolling your own crypto, but that would bring in a large external dependency.
 
+## Site-Specific Password Generation
+
+The companion program password4 creates password for a given site by encrypting FNV-1a hash of site identifier with Speck128/256 on the key passed via environmental variable CRYPTOLOCKER_PASSWORD. Example usage:
+
+    password4 john.doe@example.com
+
+FNV-1a is not cryptographically strong but it does not have to be because potential attacker cannot choose the input. We just want to use all of the input and spread it across 128 bits to avoid collisions (same output for different site identifiers).
+
+Passwords are trimmed to 16 base-58 characters separated by dashes in 4 group of 4, for a total of 19 characters. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
+
 ## References
 
 Byte order and test vectors as in Speck implementation guide https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
