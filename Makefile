@@ -8,10 +8,10 @@ password4:
 
 test: cryptolocker password4
 	cp LICENSE.encrypted LICENSE.decrypted
-	./cryptolocker fourwordsalluppercase LICENSE.decrypted
+	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./cryptolocker fourwordsalluppercase LICENSE.decrypted
 	@echo Hashes of original and decrypted should match
 	sha256sum LICENSE LICENSE.decrypted
-	@echo The following command should produce kHXv-MFEJ-uEkn-7zQE 
+	@echo The following command should produce ybSr-Bkw7-uYrt-Tnvz 
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./password4 john.doe@example.com
 
 clean:
