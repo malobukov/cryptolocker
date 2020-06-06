@@ -208,13 +208,13 @@ process_one_file(const char* filename, const uint64_t schedule[34])
 int main(int argc, char** argv)
 {
   int start_with = 1; // filenames start from argv[1]
-  char* password = std::getenv("CRYPTOLOCKER_PASSWORD");
+  const char* password = std::getenv("CRYPTOLOCKER_PASSWORD");
   if (!password) {
     start_with = 2; // filenames start from argv[2]
   }
 
   // When called without filename(s), run self-test using published test vectors and show usage
-  if (argc <= start_with) {
+  if (argc < 1) {
     const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
                                   , 0x1716151413121110ULL, 0x1f1e1d1c1b1a1918ULL };
     const uint64_t plaintext[2] = { 0x202e72656e6f6f70ULL, 0x65736f6874206e49ULL };
@@ -248,8 +248,24 @@ int main(int argc, char** argv)
   	return 0;
   }
 
+  std::string first_attempt;
   if (start_with == 2) {
-    password = argv[1];
+    if (argc == 2) { // Only one argument, so it must be a filename. Ask for password
+      std::cerr << "Enter encryption key (32 chars max): ";
+      std::getline (std::cin, first_attempt);
+      std::cerr << "Enter encryption key again: ";
+      std::string second_attempt;
+      std::getline (std::cin, second_attempt);
+      if (first_attempt.compare(second_attempt) != 0) {
+        std::cerr << "Keys don't match\n";
+        return -1;
+      }
+      password = first_attempt.c_str();
+      start_with = 1;
+    } else {
+      password = argv[1];
+      std::cerr << "Using password from first argument\n";
+    }
   } else {
     std::cerr << "Using password from environment variable\n";
   }
@@ -268,9 +284,10 @@ int main(int argc, char** argv)
     if (bytes_left <= 8) break;
   }
 
-  // Replace password with stars so that it does not appear in process list
-  if (start_with == 2) {
-    while (*password) *password++ = '*'; 
+  // Replace first command-line argument (password) with stars so that it does not appear in process list
+  if (start_with == 2 && argc > 2) {
+    char* pwd = argv[1];
+    while (*pwd) *pwd++ = '*'; 
   }
 
   // Prepare key schedule
