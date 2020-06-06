@@ -69,10 +69,12 @@ int main(int argc, char** argv)
   }
 
   // Read the secret seed for use as encryption key
-  char* seed = std::getenv("CRYPTOLOCKER_PASSWORD");
+  const char* seed = std::getenv("CRYPTOLOCKER_PASSWORD");
+  std::string seed_str;
   if (!seed) {
-    std::cerr << "Environmental variable CRYPTOLOCKER_PASSWORD is not defined\n";
-    return 2;
+    std::cerr << "Enter seed (32 chars max): ";
+    std::getline (std::cin, seed_str);
+    seed = seed_str.c_str();
   }
   uint64_t k[4] = { 0 };
   {
@@ -100,8 +102,10 @@ int main(int argc, char** argv)
   hash >>= 64;
   d[1] = (uint64_t)hash;
 
-  // Encrypt hashed input
-  speck_encrypt(d, k);
+  // Encrypt hashed input a million times
+  for (unsigned i = 0; i < 1000000; i++) {
+    speck_encrypt(d, k);
+  }
 
   // Base58 encode the result, add separators, trim to desired length (19 characters total)
   __uint128_t x = d[1];
