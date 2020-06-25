@@ -102,8 +102,8 @@ int main(int argc, char** argv)
   hash >>= 64;
   d[1] = (uint64_t)hash;
 
-  // Encrypt hashed input a million times
-  for (unsigned i = 0; i < 1000000; i++) {
+  // Encrypt hashed input a thousand times
+  for (unsigned i = 0; i < 1000; i++) {
     speck_encrypt(d, k);
   }
 
