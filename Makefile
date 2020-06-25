@@ -11,7 +11,7 @@ test: cryptolocker password4
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./cryptolocker fourwordsalluppercase LICENSE.decrypted
 	@echo Hashes of original and decrypted should match
 	sha256sum LICENSE LICENSE.decrypted
-	@echo The following command should produce ybSr-Bkw7-uYrt-Tnvz 
+	@echo The following command should produce wmRH-8ZTP-91YT-8xmy 
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./password4 john.doe@example.com
 
 clean:
