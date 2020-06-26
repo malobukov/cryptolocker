@@ -42,6 +42,10 @@ FNV-1a is not cryptographically strong but it does not have to be because potent
 
 Passwords are trimmed to 16 base-58 characters separated by dashes in 4 group of 4, for a total of 19 characters. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
 
+Alternatively this can be done in a browser like Firefox that supports BigInt by opening the HTML version:
+
+    https://malobukov.github.io/cryptolocker/password4.html
+
 ## References
 
 Byte order and test vectors as in Speck implementation guide https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
