@@ -4,11 +4,15 @@ Encrypts or decrypts a given file or files.
 
 ## Usage
 
-    cryptolocker [password] file1 [file2] [...]
+    cryptolocker file1 [file2] [...]
 
 More than one file can be specified. Returns 0 on success. Running the same command on encrypted file decrypts it.
 
-Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD, in which case all command-line arguments are interpreted as file names.
+Password can be passed via environment variable CRYPTOLOCKER_PASSWORD or entered at the prompt.
+
+Files are encrypted in place. File length does not change, but after encryption a suffix ".encrypted-12345678" is added to file name, where 12345678 is checksum. When the file is decrypted, this suffix is removed from the filename.
+
+Checksum is created by encrypting CRC32C of plaintext, CRC32C of ciphertext, and file length on the same key and with the same algorithm, then taking first 32 bits of the result. If you try to decrypt a file on a different encryption key, checksum won't match. Cryptolocker will then try to restore the file to original state by encrypting it again.
 
 ## Building
 

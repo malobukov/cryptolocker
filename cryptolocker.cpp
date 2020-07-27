@@ -17,10 +17,13 @@
 // https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
 //
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctype.h>
 #include <fstream> 
 #include <iostream>
+#include <sstream>
 #include <x86intrin.h>
 
 static inline void
@@ -105,13 +108,40 @@ bytes_to_uint64(const uint8_t bytes[], unsigned length)
 }
 
 static int // Return 0 on success
-process_one_file(const char* filename, const uint64_t schedule[34])
+process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_checksum = false)
 {
-  std::cout << "Processing " << filename << "\n";
+  // If filename ends with ".encrypted-XXXXXXXX", where XXXXXXXX are hexadecimal digits, then XXXXXXXX is checksum
+  bool has_checksum = false;
+  uint32_t expected_checksum = 0;
+  const char* p = filename;
+  if (ignore_checksum) {
+    std::cout << "Restoring " << filename << "\n";
+  } else {
+    std::cout << "Processing " << filename << "\n";
+    if (!*p) {
+      std::cerr << "Empty filename\n";
+      return 1;
+    } 
+    while (*p) {
+      p++; 
+    }
+    p--; // p points to last character in filename
+    while (p > filename && isxdigit(*p)) p--; // p points to '-'
+    if (p - 10 > filename) {
+      if (strncmp(p - 10, ".encrypted-", 11) == 0) {
+        size_t expected_checksum_length = 0;
+        expected_checksum = std::stoul(p + 1, &expected_checksum_length, 16);
+        if (expected_checksum_length > 0) {
+          has_checksum = true;
+        }
+      }
+    }
+  }
+
   std::fstream f(filename, std::fstream::in | std::fstream::out | std::fstream::binary);
   if (!f.is_open()) {
     std::cerr << "Cannot open " << filename << "\n";
-    return 1;
+    return 2;
   }
 
   // Determmine file length to use as nonce
@@ -137,6 +167,10 @@ process_one_file(const char* filename, const uint64_t schedule[34])
     (uint64_t)length, (uint64_t)length, (uint64_t)length, (uint64_t)length, 
     0, 1, 2, 3};
 
+  // Use CRC-32C (Castagnoli) for checksum
+  uint32_t crc32c_before = ~0U;
+  uint32_t crc32c_after = ~0U;
+
   while (remaining_length) {
 
     char buffer[16 * 4 * 1024];
@@ -150,9 +184,14 @@ process_one_file(const char* filename, const uint64_t schedule[34])
     f.read(&buffer[0], chunk_size);
     if (!f.good()) {
       std::cerr << "\nError reading " << filename << "\n";
-      return 1;
+      return 3;
     }
     f.seekg(position);
+
+    // Update CRC32C before processing
+    for (unsigned offset = 0; offset < chunk_size; offset++) {
+      crc32c_before = _mm_crc32_u8(crc32c_before, buffer[offset]);
+    }
 
     for (unsigned offset = 0; offset < chunk_size; offset += 16 * 4) {
 
@@ -178,11 +217,16 @@ process_one_file(const char* filename, const uint64_t schedule[34])
       }
     }
 
+    // Update CRC32C after processing
+    for (unsigned offset = 0; offset < chunk_size; offset++) {
+      crc32c_after = _mm_crc32_u8(crc32c_after, buffer[offset]);
+    }
+
     // Write processed buffer back
     f.write(&buffer[0], chunk_size);
     if (!f.good()) {
       std::cerr << "\nError writing " << filename << "\n";
-      return 1;
+      return 4;
     }
     remaining_length -= chunk_size;
 
@@ -202,19 +246,62 @@ process_one_file(const char* filename, const uint64_t schedule[34])
     std::cerr << ' ';
   }
   std::cerr << " \r";
-  return 0;
+
+  if (ignore_checksum) {
+    return 0;
+  } 
+
+  crc32c_before = ~crc32c_before;
+  crc32c_after = ~crc32c_after;
+
+  // Create checksum from plainext CRC32C, ciphertext CRC32C, and file length
+  uint64_t checksum_in[2];
+  if (has_checksum) {
+    // Upper: ciphertext CRC32C (before decryption). Lower: plaintext CRC32C (after decryption) 
+    checksum_in[0] = (((uint64_t)crc32c_before) << 32) | (uint64_t)crc32c_after;
+  } else {
+    // Upper: ciphertext CRC32C (after encryption). Lower: plaintext CRC32C (before encryption)
+    checksum_in[0] = (((uint64_t)crc32c_after) << 32) | (uint64_t)crc32c_before;
+  }
+  checksum_in[1] = (uint64_t)length;
+  // Encrypt on the same key
+  uint64_t checksum_out[2];
+  speck_encrypt(checksum_in, schedule, checksum_out);
+  // Take the lowest 32 bits
+  uint32_t checksum = (uint32_t)(checksum_out[0]);
+  std::cerr << std::hex;
+
+  if (has_checksum) {
+    if (checksum != expected_checksum) {
+      std::cerr << "Checksum mismatch: expected " << expected_checksum << ", got " << checksum << "\n";  
+      return 5;
+    } else {
+      std::string new_filename(filename);
+      new_filename = new_filename.substr(0, p - 10 - filename);
+      if (rename(filename, new_filename.c_str())) {
+        std::cerr << "Error renaming " << filename << " to " << new_filename << "\n";
+        return 6;  
+      }
+      return 0;
+    }
+  } else {
+    std::string new_filename(filename);
+    new_filename.append(".encrypted-");
+    std::stringstream stream;
+    stream << std::hex << checksum;
+    new_filename.append(stream.str());
+    if (rename(filename, new_filename.c_str())) {
+      std::cerr << "Error renaming " << filename << " to " << new_filename << "\n";
+      return 7;  
+    }
+    return 0;
+  }
 }
 
 int main(int argc, char** argv)
 {
-  int start_with = 1; // filenames start from argv[1]
-  const char* password = std::getenv("CRYPTOLOCKER_PASSWORD");
-  if (!password) {
-    start_with = 2; // filenames start from argv[2]
-  }
-
   // When called without filename(s), run self-test using published test vectors and show usage
-  if (argc < 1) {
+  if (argc <= 1) {
     const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
                                   , 0x1716151413121110ULL, 0x1f1e1d1c1b1a1918ULL };
     const uint64_t plaintext[2] = { 0x202e72656e6f6f70ULL, 0x65736f6874206e49ULL };
@@ -241,31 +328,25 @@ int main(int argc, char** argv)
                 << "Observed 0x" << converted[0] << ", 0x" << converted[1] << "\n";
        return 1;
     }
-  	std::cerr << "Usage:\n\n\tcryptolocker [password] file1 [file2] [...]\n\n"
+  	std::cerr << "Usage:\n\n\tcryptolocker file1 [file2] [...]\n\n"
   	  "Encrypt or decrypt given file or files with Speck128/256 in counter mode.\n"
-      "Password can also be passed via environment variable CRYPTOLOCKER_PASSWORD,\n"
-      "in which case all command-line arguments are interpreted as file names.\n";
+      "Password can be passed via environment variable CRYPTOLOCKER_PASSWORD.\n";
   	return 0;
   }
 
   std::string first_attempt;
-  if (start_with == 2) {
-    if (argc == 2) { // Only one argument, so it must be a filename. Ask for password
-      std::cerr << "Enter encryption key (32 chars max): ";
-      std::getline (std::cin, first_attempt);
-      std::cerr << "Enter encryption key again: ";
-      std::string second_attempt;
-      std::getline (std::cin, second_attempt);
-      if (first_attempt.compare(second_attempt) != 0) {
-        std::cerr << "Keys don't match\n";
-        return -1;
-      }
-      password = first_attempt.c_str();
-      start_with = 1;
-    } else {
-      password = argv[1];
-      std::cerr << "Using password from first argument\n";
+  const char* password = std::getenv("CRYPTOLOCKER_PASSWORD");
+  if (!password) {
+    std::cerr << "Enter encryption key (32 chars max): ";
+    std::getline (std::cin, first_attempt);
+    std::cerr << "Enter encryption key again: ";
+    std::string second_attempt;
+    std::getline (std::cin, second_attempt);
+    if (first_attempt.compare(second_attempt) != 0) {
+      std::cerr << "Keys don't match\n";
+      return -1;
     }
+    password = first_attempt.c_str();
   } else {
     std::cerr << "Using password from environment variable\n";
   }
@@ -284,20 +365,18 @@ int main(int argc, char** argv)
     if (bytes_left <= 8) break;
   }
 
-  // Replace first command-line argument (password) with stars so that it does not appear in process list
-  if (start_with == 2 && argc > 2) {
-    char* pwd = argv[1];
-    while (*pwd) *pwd++ = '*'; 
-  }
-
   // Prepare key schedule
   uint64_t schedule[34];
   speck_schedule(k, schedule);
 
   // Iterate over the given files (can be more than one)
   unsigned ok_ct = 0, fail_ct = 0;
-  for (int i = start_with; i < argc; i++) {
-    if (process_one_file(argv[i], schedule)) {
+  for (int i = 1; i < argc; i++) {
+    auto result = process_one_file(argv[i], schedule);
+    if (result == 5) { // Decrypted on wrong key (checksum mismatch). Restore by encrypting again, without checking checksum
+      process_one_file(argv[i], schedule, true);
+    }
+    if (result) {
       fail_ct++;
     } else {
       ok_ct++;
