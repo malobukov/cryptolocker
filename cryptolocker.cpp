@@ -25,7 +25,7 @@
 #include <iostream>
 #include <sstream>
 #include <x86intrin.h>
-
+ 
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
@@ -170,6 +170,16 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
   // Use CRC-32C (Castagnoli) for checksum
   uint32_t crc32c_before = ~0U;
   uint32_t crc32c_after = ~0U;
+#ifndef __SSE4_2__
+  unsigned crc32c_table[256];
+  for (uint32_t i = 0; i < 256; i++) {
+    uint32_t j = i;
+    for (int k = 0; k < 8; k++) {
+      j = j & 1 ? (j >> 1) ^ 0x82f63b78 : j >> 1;
+    }
+    crc32c_table[i] = j;
+  }
+#endif
 
   while (remaining_length) {
 
@@ -190,7 +200,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
 
     // Update CRC32C before processing
     for (unsigned offset = 0; offset < chunk_size; offset++) {
-      crc32c_before = _mm_crc32_u8(crc32c_before, buffer[offset]);
+      #ifdef __SSE4_2__
+        crc32c_before = _mm_crc32_u8(crc32c_before, buffer[offset]);
+      #else
+        crc32c_before = crc32c_table[(crc32c_before ^ buffer[offset]) & 0xff] ^ (crc32c_before >> 8);
+      #endif
     }
 
     for (unsigned offset = 0; offset < chunk_size; offset += 16 * 4) {
@@ -219,7 +233,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
 
     // Update CRC32C after processing
     for (unsigned offset = 0; offset < chunk_size; offset++) {
-      crc32c_after = _mm_crc32_u8(crc32c_after, buffer[offset]);
+      #ifdef __SSE4_2__
+        crc32c_after = _mm_crc32_u8(crc32c_after, buffer[offset]);
+      #else
+        crc32c_after = crc32c_table[(crc32c_after ^ buffer[offset]) & 0xff] ^ (crc32c_after >> 8);
+      #endif
     }
 
     // Write processed buffer back
