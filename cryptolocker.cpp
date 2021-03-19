@@ -272,7 +272,7 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
   crc32c_before = ~crc32c_before;
   crc32c_after = ~crc32c_after;
 
-  // Create checksum from plainext CRC32C, ciphertext CRC32C, and file length
+  // Create checksum from plaintext CRC32C, ciphertext CRC32C, and file length
   uint64_t checksum_in[2];
   if (has_checksum) {
     // Upper: ciphertext CRC32C (before decryption). Lower: plaintext CRC32C (after decryption) 
