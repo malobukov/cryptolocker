@@ -20,7 +20,7 @@ There are no external dependencies, just run
 
     make
     
-to create cryptolocker binary.
+to create cryptolocker binaries. To cross-compile Windows executable on Linux, install MinGW-w64.
 
 ## Limitations
 
