@@ -26,6 +26,8 @@ to create cryptolocker binary.
 
 Applies Speck128/256 in CTR mode, as a stream cipher, using file length as nonce. This can potentially be a problem, as encrypting two files of the same size with the same key leaks their XOR, but should be ok for the intended use: occasionally encrypting large archive files. Not having to carry the nonce allows encryption in place, without changing file length.
 
+When password is specified in the command line, it is replaced with asterisks to prevent it from appearing in process list (although it might still remain in ~/.bash_history or similar command line history files). Beyond that, no attempt is made to purge key material from memory after use. With the tricks modern OS and optimizing compilers play, those are usually futile anyway.
+
 No password stretching or KDF, encryption key is just zero-padded password, so use a long password. Key length is 256 bit, so if the password is more than 32 bytes long then only the first 32 bytes are used.
 
 ## Controvercy

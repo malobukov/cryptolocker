@@ -6,6 +6,10 @@
 //
 //   g++ -O3 -Wall -Wextra -std=c++11 -march=native -g -o cryptolocker cryptolocker.cpp
 //
+// To cross-compile Windows executable on Linux, install MinGW-w64:
+//
+//   sudo apt-get install mingw-w64
+//
 // Applies Speck128/256 in CTR mode, as a stream cipher, using file length as nonce.
 // This can potentially be a problem, as encrypting two files of the same size with 
 // the same key leaks their XOR, but should be ok for the intended use: occasionally 
@@ -25,7 +29,11 @@
 #include <iostream>
 #include <sstream>
 #include <x86intrin.h>
- 
+
+// CPU capability flags, set at runtime
+int g_avx2_supported = 0;
+int g_sse42_supported = 0;
+
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
@@ -69,7 +77,7 @@ speck_encrypt4( const uint64_t plaintext[2 * 4]
               , uint64_t ciphertext[2 * 4]
               )
 {
-  #ifdef __AVX2__
+  if (g_avx2_supported) {
     auto x = _mm256_set_epi64x(plaintext[7], plaintext[6], plaintext[5], plaintext[4]);
     auto y = _mm256_set_epi64x(plaintext[3], plaintext[2], plaintext[1], plaintext[0]);
     for (unsigned i = 0; i < 34; i++) {
@@ -82,7 +90,7 @@ speck_encrypt4( const uint64_t plaintext[2 * 4]
     }
     _mm256_storeu_si256((__m256i_u*)&ciphertext[4], x);
     _mm256_storeu_si256((__m256i_u*)&ciphertext[0], y);
-  #else
+  } else {
     ciphertext[0] = plaintext[0]; ciphertext[1] = plaintext[1];
     ciphertext[2] = plaintext[2]; ciphertext[3] = plaintext[3];
     ciphertext[4] = plaintext[4]; ciphertext[5] = plaintext[5];
@@ -94,7 +102,7 @@ speck_encrypt4( const uint64_t plaintext[2 * 4]
       speck_round(ciphertext[6], ciphertext[2], si); 
       speck_round(ciphertext[7], ciphertext[3], si); 
     }
-  #endif
+  }
 }
 
 static uint64_t 
@@ -158,7 +166,7 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
   remaining_length = length;
   std::cerr << " ";
   for (unsigned i = 0; i < total_notches; i++) {
-    std::cerr << "▒"; // U+2592 Medium shade
+    std::cerr << ".";
   }
   std::cerr << " \r ";
   unsigned notches_shown = 0;
@@ -170,16 +178,16 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
   // Use CRC-32C (Castagnoli) for checksum
   uint32_t crc32c_before = ~0U;
   uint32_t crc32c_after = ~0U;
-#ifndef __SSE4_2__
-  unsigned crc32c_table[256];
-  for (uint32_t i = 0; i < 256; i++) {
-    uint32_t j = i;
-    for (int k = 0; k < 8; k++) {
-      j = j & 1 ? (j >> 1) ^ 0x82f63b78 : j >> 1;
+  unsigned crc32c_table[256] = {};
+  if (!g_sse42_supported) {
+    for (uint32_t i = 0; i < 256; i++) {
+      uint32_t j = i;
+      for (int k = 0; k < 8; k++) {
+        j = j & 1 ? (j >> 1) ^ 0x82f63b78 : j >> 1;
+      }
+      crc32c_table[i] = j;
     }
-    crc32c_table[i] = j;
   }
-#endif
 
   while (remaining_length) {
 
@@ -200,11 +208,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
 
     // Update CRC32C before processing
     for (unsigned offset = 0; offset < chunk_size; offset++) {
-      #ifdef __SSE4_2__
+      if (g_sse42_supported) {
         crc32c_before = _mm_crc32_u8(crc32c_before, buffer[offset]);
-      #else
+      } else {
         crc32c_before = crc32c_table[(crc32c_before ^ buffer[offset]) & 0xff] ^ (crc32c_before >> 8);
-      #endif
+      }
     }
 
     for (unsigned offset = 0; offset < chunk_size; offset += 16 * 4) {
@@ -233,11 +241,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
 
     // Update CRC32C after processing
     for (unsigned offset = 0; offset < chunk_size; offset++) {
-      #ifdef __SSE4_2__
+      if (g_sse42_supported) {
         crc32c_after = _mm_crc32_u8(crc32c_after, buffer[offset]);
-      #else
+      } else {
         crc32c_after = crc32c_table[(crc32c_after ^ buffer[offset]) & 0xff] ^ (crc32c_after >> 8);
-      #endif
+      }
     }
 
     // Write processed buffer back
@@ -253,7 +261,7 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
     if (total_notches - notches_shown > notches_remaining) {
       auto notches_to_show = total_notches - notches_shown - notches_remaining;
       while (notches_to_show--) {
-        std::cerr << "█"; // U+2588 Full block
+        std::cerr << "o";
         notches_shown++;
       }
     }
@@ -272,7 +280,7 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
   crc32c_before = ~crc32c_before;
   crc32c_after = ~crc32c_after;
 
-  // Create checksum from plaintext CRC32C, ciphertext CRC32C, and file length
+  // Create checksum from plainext CRC32C, ciphertext CRC32C, and file length
   uint64_t checksum_in[2];
   if (has_checksum) {
     // Upper: ciphertext CRC32C (before decryption). Lower: plaintext CRC32C (after decryption) 
@@ -318,6 +326,9 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
 
 int main(int argc, char** argv)
 {
+  g_avx2_supported = __builtin_cpu_supports("avx2");
+  g_sse42_supported = __builtin_cpu_supports("sse4.2");
+
   // When called without filename(s), run self-test using published test vectors and show usage
   if (argc <= 1) {
     const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
@@ -349,6 +360,16 @@ int main(int argc, char** argv)
   	std::cerr << "Usage:\n\n\tcryptolocker file1 [file2] [...]\n\n"
   	  "Encrypt or decrypt given file or files with Speck128/256 in counter mode.\n"
       "Password can be passed via environment variable CRYPTOLOCKER_PASSWORD.\n";
+    if (g_sse42_supported) {
+      std::cerr << "Will use SSE4.2";
+      if (g_avx2_supported) {
+        std::cerr << " and AVX2 instructions supported by this CPU.\n";
+      } else {
+        std::cerr << ", but not AVX2 CPU instructions.\n";
+      }
+    } else {
+      std::cerr << "No CPU support for SSE4.2 or AVX2 detected.\n";
+    }
   	return 0;
   }
 
@@ -357,7 +378,7 @@ int main(int argc, char** argv)
   if (!password) {
     std::cerr << "Enter encryption key (32 chars max): ";
     std::getline (std::cin, first_attempt);
-    std::cerr << "Enter encryption key again: ";
+    std::cerr << "Enter encryption key again         : ";
     std::string second_attempt;
     std::getline (std::cin, second_attempt);
     if (first_attempt.compare(second_attempt) != 0) {
