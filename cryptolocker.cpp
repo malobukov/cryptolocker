@@ -2,23 +2,28 @@
 //
 // Encrypts or decrypts a given file or files
 //
+// Applies Speck128/256 in CTR mode. A 16 byte long suffix is appended at the end of the file, 
+// also encrypted with CTR on the same key, with both nonce and counter set to -1:
+//
+// Bytes 0-3: CRC32C of plaintext
+// Bytes 4-7: CRC32C of plaintext (second copy)
+// Bytes 8-15: randomly generated nonce
+//
+// Older versions used file length as nonce, and kept checksum in filename.
+// This can potentially be a problem, as encrypting two files of the same size with the same 
+// key leaks their XOR. Decryption code for this approach is kept for backwards compatibility,
+// but encryption is now always using random nonces.
+//
+// Byte order and test vectors as in Speck implementation guide 
+// https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
+//
 // Building:
 //
-//   g++ -O3 -Wall -Wextra -std=c++11 -march=native -g -o cryptolocker cryptolocker.cpp
+//   g++ -O3 -Wall -Wextra -std=c++17 -march=native -g -o cryptolocker cryptolocker.cpp
 //
 // To cross-compile Windows executable on Linux, install MinGW-w64:
 //
 //   sudo apt-get install mingw-w64
-//
-// Applies Speck128/256 in CTR mode, as a stream cipher, using file length as nonce.
-// This can potentially be a problem, as encrypting two files of the same size with 
-// the same key leaks their XOR, but should be ok for the intended use: occasionally 
-// encrypting large archive files.
-//
-// Not having to carry the nonce allows encryption in place, without changing file length. 
-//
-// Byte order and test vectors as in Speck implementation guide 
-// https://nsacyber.github.io/simon-speck/implementations/ImplementationGuide1.1.pdf
 //
 #include <cstdint>
 #include <cstdio>
@@ -28,6 +33,8 @@
 #include <fstream> 
 #include <iostream>
 #include <sstream>
+#include <sys/types.h>
+#include <unistd.h>
 #include <x86intrin.h>
 
 // CPU capability flags, set at runtime
@@ -116,54 +123,108 @@ bytes_to_uint64(const uint8_t bytes[], unsigned length)
 }
 
 static int // Return 0 on success
-process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_checksum = false)
+process_one_file(const char* filename, const uint64_t schedule[34], bool restore = false)
 {
-  // If filename ends with ".encrypted-XXXXXXXX", where XXXXXXXX are hexadecimal digits, then XXXXXXXX is checksum
-  bool has_checksum = false;
-  uint32_t expected_checksum = 0;
-  const char* p = filename;
-  if (ignore_checksum) {
-    std::cout << "Restoring " << filename << "\n";
-  } else {
-    std::cout << "Processing " << filename << "\n";
-    if (!*p) {
-      std::cerr << "Empty filename\n";
-      return 1;
-    } 
-    while (*p) {
-      p++; 
-    }
-    p--; // p points to last character in filename
-    while (p > filename && isxdigit(*p)) p--; // p points to '-'
-    if (p - 10 > filename) {
-      if (strncmp(p - 10, ".encrypted-", 11) == 0) {
-        size_t expected_checksum_length = 0;
-        expected_checksum = std::stoul(p + 1, &expected_checksum_length, 16);
-        if (expected_checksum_length > 0) {
-          has_checksum = true;
-        }
-      }
-    }
-  }
-
   std::fstream f(filename, std::fstream::in | std::fstream::out | std::fstream::binary);
   if (!f.is_open()) {
     std::cerr << "Cannot open " << filename << "\n";
     return 2;
   }
 
-  // Determmine file length to use as nonce
+  // Determmine file length
   const auto begin = f.tellg();
   f.seekg (0, std::ios::end);
   const auto end = f.tellg();
   f.seekg (0);
   const auto length = (end - begin);
+  auto remaining_length = length;
+
+  // If filename ends with ".encrypted", CRC32C (twice) and nonce are appended at the end of the file
+  // If filename ends with ".encrypted-XXXXXXXX", where XXXXXXXX are hexadecimal digits, 
+  // then XXXXXXXX is checksum, and file length is nonce (for compatibility with previous version)
+  bool check_checksum = false;
+  uint32_t expected_checksum = 0;
+  bool check_crc32c = false;
+  uint32_t expected_crc32c = 0;
+  bool append_suffix = !restore;
+  uint64_t nonce = (uint64_t)length;
+
+  const char* p = filename;
+  if (restore) {
+    std::cout << "Restoring " << filename << "\n";
+  } else {
+    std::cout << "Processing " << filename << "\n";
+  }
+  if (!*p) {
+    std::cerr << "Empty filename\n";
+    return 1;
+  } 
+  while (*p) {
+    p++; 
+  }
+  p--; // p points to last character in filename, p - 9 points to '.'
+  if (p - 9 > filename) {
+    if (strncmp(p - 9, ".encrypted", 10) == 0) {
+      if (length >= 16) {
+        // Read the suffix
+        f.seekg(length - 16);
+        uint64_t suffix[2] = {};
+        f.read((char*)(&suffix[0]), 16);
+        if (!f.good()) {
+          std::cerr << "\nError reading suffix from " << filename << "\n";
+          return 3;
+        }
+        f.seekg(0);
+
+        // Decrypt suffix on nonce -1 and counter -1
+        const uint64_t all_ones[2]  = { 0xffffffffffffffffULL, 0xffffffffffffffffULL };
+        uint64_t gamma[2];
+        speck_encrypt(all_ones, schedule, gamma);
+        suffix[0] ^= gamma[0];
+        suffix[1] ^= gamma[1];
+
+        // See if the two copies of the checksum stored in the suffix match
+        const uint32_t crc32c0 = (uint32_t)suffix[0];
+        const uint32_t crc32c1 = (uint32_t)(suffix[0] >> 32);
+        if (crc32c0 != crc32c1) {
+          std::cerr << "CRC mismatch, maybe wrong password?\n";
+          return 8;
+        }
+        check_crc32c = true;
+        expected_crc32c = crc32c0;
+        nonce = suffix[1];
+        remaining_length = length - 16;
+        append_suffix = false;
+      }
+    }
+  }
+  if (!check_crc32c) { // No suffix in file, but maybe filename contains checksum (from old version)
+    while (p > filename && isxdigit(*p)) p--; // p points to '-'
+    if (p - 11 > filename) {
+      if (strncmp(p - 10, ".encrypted-", 11) == 0) {
+        size_t expected_checksum_length = 0;
+        expected_checksum = std::stoul(p + 1, &expected_checksum_length, 16);
+        if (expected_checksum_length > 0) {
+          check_checksum = true;
+          append_suffix = false;
+        }
+      }
+    }
+  }
+  if (append_suffix) { // Use hardware random number generator to create nonce
+    long long unsigned int random_number = 0;
+    if (_rdrand64_step(&random_number) != 1) {
+      std::cerr << "_rdrand64_step() failed, will revert to using only file lengh as nonce\n";
+    }
+    nonce ^= (uint64_t)random_number;
+  }
 
   // Make progress bar length proportional to log of file size, plus intercept
   unsigned total_notches = 10;
-  auto remaining_length = length;
-  while (remaining_length >>= 1) total_notches++;
-  remaining_length = length;
+  {
+    auto x = remaining_length;
+    while (x >>= 1) total_notches++;
+  }
   std::cerr << " ";
   for (unsigned i = 0; i < total_notches; i++) {
     std::cerr << ".";
@@ -172,7 +233,7 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
   unsigned notches_shown = 0;
 
   uint64_t nonce_and_counter[2 * 4] = { 
-    (uint64_t)length, (uint64_t)length, (uint64_t)length, (uint64_t)length, 
+    nonce, nonce, nonce, nonce, 
     0, 1, 2, 3};
 
   // Use CRC-32C (Castagnoli) for checksum
@@ -266,40 +327,53 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
       }
     }
   }
-  f.close();
   std::cerr << "\r ";
   for (unsigned i = 0; i < total_notches; i++) {
     std::cerr << ' ';
   }
   std::cerr << " \r";
-
-  if (ignore_checksum) {
-    return 0;
-  } 
-
   crc32c_before = ~crc32c_before;
   crc32c_after = ~crc32c_after;
-
-  // Create checksum from plainext CRC32C, ciphertext CRC32C, and file length
-  uint64_t checksum_in[2];
-  if (has_checksum) {
+  if (restore) {
+    return 0;
+  } 
+  if (append_suffix) {
+    uint64_t suffix[2] = { (((uint64_t)crc32c_before) << 32) | (uint64_t)crc32c_before, nonce };
+    // Encrypt suffix on nonce = counter = -1
+    const uint64_t all_ones[2]  = { 0xffffffffffffffffULL, 0xffffffffffffffffULL };
+    uint64_t gamma[2];
+    speck_encrypt(all_ones, schedule, gamma);
+    suffix[0] ^= gamma[0];
+    suffix[1] ^= gamma[1];
+    f.write((char*)(&suffix[0]), 16);
+    if (!f.good()) {
+      std::cerr << "\nError writing suffix\n";
+      return 3;
+    }
+    f.close();
+    std::string new_filename(filename);
+    new_filename.append(".encrypted");
+    if (rename(filename, new_filename.c_str())) {
+      std::cerr << "Error renaming " << filename << " to " << new_filename << "\n";
+      return 7;  
+    }
+    return 0;
+  }
+  f.close();
+  if (check_checksum) {
+    // Legacy checksum from plainext CRC32C, ciphertext CRC32C, and file length
+    uint64_t checksum_in[2];
     // Upper: ciphertext CRC32C (before decryption). Lower: plaintext CRC32C (after decryption) 
     checksum_in[0] = (((uint64_t)crc32c_before) << 32) | (uint64_t)crc32c_after;
-  } else {
-    // Upper: ciphertext CRC32C (after encryption). Lower: plaintext CRC32C (before encryption)
-    checksum_in[0] = (((uint64_t)crc32c_after) << 32) | (uint64_t)crc32c_before;
-  }
-  checksum_in[1] = (uint64_t)length;
-  // Encrypt on the same key
-  uint64_t checksum_out[2];
-  speck_encrypt(checksum_in, schedule, checksum_out);
-  // Take the lowest 32 bits
-  uint32_t checksum = (uint32_t)(checksum_out[0]);
-  std::cerr << std::hex;
+    checksum_in[1] = (uint64_t)length;
+    // Encrypt on the same key
+    uint64_t checksum_out[2];
+    speck_encrypt(checksum_in, schedule, checksum_out);
+    // Take the lowest 32 bits
+    uint32_t checksum = (uint32_t)(checksum_out[0]);
 
-  if (has_checksum) {
     if (checksum != expected_checksum) {
-      std::cerr << "Checksum mismatch: expected " << expected_checksum << ", got " << checksum << "\n";  
+      std::cerr << "Checksum mismatch: expected 0x" << std::hex << expected_checksum << ", got 0x" << checksum << "\n";  
       return 5;
     } else {
       std::string new_filename(filename);
@@ -310,18 +384,25 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool ignore_
       }
       return 0;
     }
-  } else {
-    std::string new_filename(filename);
-    new_filename.append(".encrypted-");
-    std::stringstream stream;
-    stream << std::hex << checksum;
-    new_filename.append(stream.str());
-    if (rename(filename, new_filename.c_str())) {
-      std::cerr << "Error renaming " << filename << " to " << new_filename << "\n";
-      return 7;  
-    }
-    return 0;
   }
+  if (check_crc32c) {
+    if (expected_crc32c != crc32c_after) {
+      std::cerr << "CRC32C mismatch: expected 0x" << std::hex << expected_crc32c << ", got 0x" << crc32c_after << "\n";  
+      return 5;      
+    } else { 
+      std::string new_filename(filename);
+      new_filename = new_filename.substr(0, p - 9 - filename);
+      if (rename(filename, new_filename.c_str())) {
+        std::cerr << "Error renaming " << filename << " to " << new_filename << "\n";
+        return 6;  
+      } 
+      if (truncate(new_filename.c_str(), length - 16)) {
+        std::cerr << "Error truncating " << new_filename << "\n";
+        return 6;
+      }
+    }
+  }
+  return 0;
 }
 
 int main(int argc, char** argv)
@@ -412,7 +493,12 @@ int main(int argc, char** argv)
   unsigned ok_ct = 0, fail_ct = 0;
   for (int i = 1; i < argc; i++) {
     auto result = process_one_file(argv[i], schedule);
-    if (result == 5) { // Decrypted on wrong key (checksum mismatch). Restore by encrypting again, without checking checksum
+    if (result == 5) {
+      // Decrypted on the wrong key (checksum mismatch). 
+      // Restore by encrypting again, without checking checksum.
+      // Should only happen when file length is used as nonce (backward compatibility).
+      // Now that CRC32C is stored in the suffix rather than file name,
+      // incorrect password can be identified before decryption. 
       process_one_file(argv[i], schedule, true);
     }
     if (result) {
@@ -421,6 +507,8 @@ int main(int argc, char** argv)
       ok_ct++;
     }
   }
-  std::cerr << ok_ct << " files(s), " << fail_ct << " errors\n";
+  if (ok_ct + fail_ct > 1) {
+    std::cerr << (ok_ct + fail_ct) << " files, " << fail_ct << " errors\n";
+  }
   return 0;
 }
