@@ -19,7 +19,7 @@ test: cryptolocker password4
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./cryptolocker LICENSE.tmp2.encrypted
 	@echo Hashes of LICENSE, LICENSE.tmp1, and LICENSE.tmp2 should match
 	sha256sum LICENSE LICENSE.tmp1 LICENSE.tmp2
-	@echo The following command should produce wmRH-8ZTP-91YT-8xmy 
+	@echo The following command should produce Quill-pasta-dried-045 
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./password4 john.doe@example.com
 
 clean:
