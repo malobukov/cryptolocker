@@ -25,6 +25,7 @@
 //
 //   sudo apt-get install mingw-w64
 //
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -215,12 +216,13 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
       }
     }
   }
-  if (append_suffix) { // Use hardware random number generator to create nonce
-    long long unsigned int random_number = 0;
+  if (append_suffix) { 
+    long long unsigned int random_number = 
+      std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::high_resolution_clock::now().time_since_epoch()
+      ).count(); // If no hardware random number generator is available, use time as a substitute
     #if defined(__AVX2__)
-      if (_rdrand64_step(&random_number) != 1) {
-        std::cerr << "_rdrand64_step() failed, will revert to using only file lengh as nonce\n";
-      }
+      _rdrand64_step(&random_number); // Use hardware random number generator, if available, to create nonce
     #endif
     nonce ^= (uint64_t)random_number;
   }
