@@ -44,7 +44,7 @@ FNV-1a is not cryptographically strong but it does not have to be because potent
 
 Passwords are converted to three words from an EFF word list followed by a three digit number, separated by dashes. First letter is capitalized. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
 
-Total entropy is approximately 41 bits, an intentional compromize to make passwords easier to type. This also ensures brute forcing one password does not compromise all others, as only 41 of 128 bits of entropy are affected.
+Total entropy is approximately 41 bits, an intentional compromize to make passwords easier to type. This also ensures brute forcing one password does not compromise all others, as only 41 of 256 bits of key entropy are affected.
 
 ## References
 
