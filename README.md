@@ -38,11 +38,13 @@ The companion program password4 creates password for a given site by encrypting 
 
     password4 john.doe@example.com
 
+Alternatively this can be done in a browser like Firefox that supports BigInt by opening [https://malobukov.github.io/cryptolocker/password4.html](https://malobukov.github.io/cryptolocker/password4.html).
+
 FNV-1a is not cryptographically strong but it does not have to be because potential attacker cannot choose the input. We just want to use all of the input and spread it across 128 bits to avoid collisions (same output for different site identifiers).
 
-Passwords are trimmed to 16 base-58 characters separated by dashes in 4 group of 4, for a total of 19 characters. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
+Passwords are converted to three words from an EFF word list followed by a three digit number, separated by dashes. First letter is capitalized. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
 
-Alternatively this can be done in a browser like Firefox that supports BigInt by opening [https://malobukov.github.io/cryptolocker/password4.html](https://malobukov.github.io/cryptolocker/password4.html).
+Total entropy is approximately 41 bits, an intentional compromize to make passwords easier to type. This also ensures brute forcing one password does not compromise all others, as only 41 of 128 bits of entropy are affected.
 
 ## References
 
