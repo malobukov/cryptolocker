@@ -50,7 +50,7 @@ speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
   #if defined(__AVX2__)
     y = __rolq(y, 3);
   #else
-    y = (x << 3) | (y >> (64 - 3));
+    y = (y << 3) | (y >> (64 - 3));
   #endif
   y ^= x;
 }
