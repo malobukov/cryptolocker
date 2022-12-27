@@ -236,10 +236,18 @@ static const char* wordlist[WORDLIST_LENGTH] =
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
-  x = __rorq(x, 8);
+  #if defined(__AVX2__)
+    x = __rorq(x, 8);
+  #else
+    x = (x >> 8) | (x << (64 - 8));
+  #endif
   x += y;
   x ^= k;
-  y = __rolq(y, 3);
+  #if defined(__AVX2__)
+    y = __rolq(y, 3);
+  #else
+    y = (y << 3) | (y >> (64 - 3));
+  #endif
   y ^= x;
 }
 

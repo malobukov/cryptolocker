@@ -37,17 +37,21 @@
 #include <unistd.h>
 #include <x86intrin.h>
 
-// CPU capability flags, set at runtime
-int g_avx2_supported = 0;
-int g_sse42_supported = 0;
-
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
-  x = __rorq(x, 8);
+  #if defined(__AVX2__)
+    x = __rorq(x, 8);
+  #else
+    x = (x >> 8) | (x << (64 - 8));
+  #endif
   x += y;
   x ^= k;
-  y = __rolq(y, 3);
+  #if defined(__AVX2__)
+    y = __rolq(y, 3);
+  #else
+    y = (x << 3) | (y >> (64 - 3));
+  #endif
   y ^= x;
 }
 
@@ -84,7 +88,7 @@ speck_encrypt4( const uint64_t plaintext[2 * 4]
               , uint64_t ciphertext[2 * 4]
               )
 {
-  if (g_avx2_supported) {
+  #if defined(__AVX2__)
     auto x = _mm256_set_epi64x(plaintext[7], plaintext[6], plaintext[5], plaintext[4]);
     auto y = _mm256_set_epi64x(plaintext[3], plaintext[2], plaintext[1], plaintext[0]);
     for (unsigned i = 0; i < 34; i++) {
@@ -97,7 +101,7 @@ speck_encrypt4( const uint64_t plaintext[2 * 4]
     }
     _mm256_storeu_si256((__m256i_u*)&ciphertext[4], x);
     _mm256_storeu_si256((__m256i_u*)&ciphertext[0], y);
-  } else {
+  #else
     ciphertext[0] = plaintext[0]; ciphertext[1] = plaintext[1];
     ciphertext[2] = plaintext[2]; ciphertext[3] = plaintext[3];
     ciphertext[4] = plaintext[4]; ciphertext[5] = plaintext[5];
@@ -109,7 +113,7 @@ speck_encrypt4( const uint64_t plaintext[2 * 4]
       speck_round(ciphertext[6], ciphertext[2], si); 
       speck_round(ciphertext[7], ciphertext[3], si); 
     }
-  }
+  #endif
 }
 
 static uint64_t 
@@ -213,9 +217,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
   }
   if (append_suffix) { // Use hardware random number generator to create nonce
     long long unsigned int random_number = 0;
-    if (_rdrand64_step(&random_number) != 1) {
-      std::cerr << "_rdrand64_step() failed, will revert to using only file lengh as nonce\n";
-    }
+    #if defined(__AVX2__)
+      if (_rdrand64_step(&random_number) != 1) {
+        std::cerr << "_rdrand64_step() failed, will revert to using only file lengh as nonce\n";
+      }
+    #endif
     nonce ^= (uint64_t)random_number;
   }
 
@@ -239,8 +245,8 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
   // Use CRC-32C (Castagnoli) for checksum
   uint32_t crc32c_before = ~0U;
   uint32_t crc32c_after = ~0U;
-  unsigned crc32c_table[256] = {};
-  if (!g_sse42_supported) {
+  #if !defined(__AVX2__)
+    unsigned crc32c_table[256] = {};
     for (uint32_t i = 0; i < 256; i++) {
       uint32_t j = i;
       for (int k = 0; k < 8; k++) {
@@ -248,7 +254,7 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
       }
       crc32c_table[i] = j;
     }
-  }
+  #endif
 
   while (remaining_length) {
 
@@ -269,11 +275,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
 
     // Update CRC32C before processing
     for (unsigned offset = 0; offset < chunk_size; offset++) {
-      if (g_sse42_supported) {
+      #if defined(__AVX2__)
         crc32c_before = _mm_crc32_u8(crc32c_before, buffer[offset]);
-      } else {
+      #else
         crc32c_before = crc32c_table[(crc32c_before ^ buffer[offset]) & 0xff] ^ (crc32c_before >> 8);
-      }
+      #endif
     }
 
     for (unsigned offset = 0; offset < chunk_size; offset += 16 * 4) {
@@ -302,11 +308,11 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
 
     // Update CRC32C after processing
     for (unsigned offset = 0; offset < chunk_size; offset++) {
-      if (g_sse42_supported) {
+      #if defined(__AVX2__)
         crc32c_after = _mm_crc32_u8(crc32c_after, buffer[offset]);
-      } else {
+      #else
         crc32c_after = crc32c_table[(crc32c_after ^ buffer[offset]) & 0xff] ^ (crc32c_after >> 8);
-      }
+      #endif
     }
 
     // Write processed buffer back
@@ -407,9 +413,6 @@ process_one_file(const char* filename, const uint64_t schedule[34], bool restore
 
 int main(int argc, char** argv)
 {
-  g_avx2_supported = __builtin_cpu_supports("avx2");
-  g_sse42_supported = __builtin_cpu_supports("sse4.2");
-
   // When called without filename(s), run self-test using published test vectors and show usage
   if (argc <= 1) {
     const uint64_t key[4]       = { 0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL
@@ -441,16 +444,9 @@ int main(int argc, char** argv)
   	std::cerr << "Usage:\n\n\tcryptolocker file1 [file2] [...]\n\n"
   	  "Encrypt or decrypt given file or files with Speck128/256 in counter mode.\n"
       "Password can be passed via environment variable CRYPTOLOCKER_PASSWORD.\n";
-    if (g_sse42_supported) {
-      std::cerr << "Will use SSE4.2";
-      if (g_avx2_supported) {
-        std::cerr << " and AVX2 instructions supported by this CPU.\n";
-      } else {
-        std::cerr << ", but not AVX2 CPU instructions.\n";
-      }
-    } else {
-      std::cerr << "No CPU support for SSE4.2 or AVX2 detected.\n";
-    }
+    #if defined(__AVX2__)
+      std::cerr << "Will use SSE4.2 and AVX2 instructions.\n";
+    #endif
   	return 0;
   }
 
