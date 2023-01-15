@@ -38,6 +38,8 @@
 #include <unistd.h>
 #include <x86intrin.h>
 
+#define CRYPTOLOCKER_VERSION "3.13"
+
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)
 {
@@ -443,7 +445,8 @@ int main(int argc, char** argv)
                 << "Observed 0x" << converted[0] << ", 0x" << converted[1] << "\n";
        return 1;
     }
-  	std::cerr << "Usage:\n\n\tcryptolocker file1 [file2] [...]\n\n"
+  	std::cerr << "cryptolocker version " CRYPTOLOCKER_VERSION "\n\n"
+      "Usage:\n\n\t" << argv[0] << " file1 [file2] [...]\n\n"
   	  "Encrypt or decrypt given file or files with Speck128/256 in counter mode.\n"
       "Password can be passed via environment variable CRYPTOLOCKER_PASSWORD.\n";
     #if defined(__AVX2__)

@@ -1,10 +1,10 @@
-all: cryptolocker cryptolocker.exe password4 password4.exe
+all: cryptolocker crptlckr.exe password4 password4.exe
 
 cryptolocker: cryptolocker.cpp
 	g++ -O3 -Wall -Wextra -std=c++17 -march=native -static -o cryptolocker cryptolocker.cpp
 
-cryptolocker.exe: cryptolocker.cpp
-	/usr/bin/x86_64-w64-mingw32-g++-win32 -O3 -Wall -Wextra -std=c++17 -march=x86-64 -static -o cryptolocker.exe cryptolocker.cpp
+crptlckr.exe: cryptolocker.cpp
+	/usr/bin/x86_64-w64-mingw32-g++-win32 -O3 -Wall -Wextra -std=c++17 -march=x86-64 -static -o crptlckr.exe cryptolocker.cpp
 
 password4: password4.cpp
 	g++ -O3 -Wall -Wextra -std=c++11 -o password4 password4.cpp
