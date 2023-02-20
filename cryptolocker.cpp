@@ -38,7 +38,7 @@
 #include <unistd.h>
 #include <x86intrin.h>
 
-#define CRYPTOLOCKER_VERSION "3.13"
+#define CRYPTOLOCKER_VERSION "3.14"
 
 static inline void
 speck_round(uint64_t& x, uint64_t& y, const uint64_t k)

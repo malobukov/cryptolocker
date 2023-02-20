@@ -20,11 +20,11 @@ Run
 
     make
     
-to create cryptolocker binaries. There are no external dependencies. To cross-compile Windows executable on Linux, install MinGW-w64.
+to create cryptolocker binaries. There are no external dependencies. To cross-compile Windows executable on Linux, install MinGW-w64. Windows binary is called <tt>crptlckr.exe</tt> because full name is flagged as malware.
 
 ## Limitations
 
-No password stretching or KDF, encryption key is just zero-padded password, so use a long password. Key length is 256 bit, so if the password is more than 32 bytes long then only the first 32 bytes are used.
+No password stretching or KDF (encryption key is just zero-padded password), so use a long password. Key length is 256 bit, so if the password is more than 32 bytes long then only the first 32 bytes are used.
 
 ## Controvercy
 
@@ -34,7 +34,7 @@ Best practice is to use a cryptographic library instead of rolling your own cryp
 
 ## Site-Specific Password Generation
 
-The companion program password4 creates password for a given site by encrypting FNV-1a hash of site identifier with Speck128/256 on the key passed via environmental variable CRYPTOLOCKER_PASSWORD. Example usage:
+The companion program <tt>password4</tt> creates passwords for a given site by encrypting FNV-1a hash of site identifier with Speck128/256 on the key passed via environmental variable <tt>CRYPTOLOCKER_PASSWORD</tt>. Example usage:
 
     password4 john.doe@example.com
 
@@ -45,6 +45,8 @@ FNV-1a is not cryptographically strong but it does not have to be because potent
 Passwords are converted to three words from an EFF word list followed by a three digit number, separated by dashes. First letter is capitalized. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
 
 Total entropy is approximately 41 bits, an intentional compromize to make passwords easier to type. This also ensures brute forcing one password does not compromise all others, as only 41 of 256 bits of key entropy are affected.
+
+For low-security applications, a shorter password is created like [system name in Elite game](https://www.bbcelite.com/deep_dives/generating_system_names.html), followed by a dash and a number between 1 and 99. Total entropy of this short password is between 22 and 28 bits.
 
 ## References
 

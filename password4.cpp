@@ -12,6 +12,14 @@
 #include <iostream>
 #include <x86intrin.h>
 
+// 32 syllables used by Elite when generating system names
+// https://www.bbcelite.com/deep_dives/generating_system_names.html
+static const char* elite_syllable_list[] = 
+{"al", "le", "xe", "ge", "za", "ce", "bi", "so", "us", "es"
+,"ar", "ma", "in", "di", "re", "a",  "er", "at", "en", "be"
+,"ra", "la", "ve", "ti", "ed", "or", "qu", "an", "te", "is"
+,"ri", "on"};
+
 // 1,296 most memorable and distinct words from
 // https://www.eff.org/files/2016/09/08/eff_short_wordlist_1.txt
 const int WORDLIST_LENGTH = 1296;
@@ -292,7 +300,7 @@ int main(int argc, char** argv)
        return 1;
     }
     std::cerr << "Usage:\n\n\tpassword4 john.doe@example.com\n\n"
-      "Creates base58-encoded password by encrypting FNV-1a hash of given identifier\n"
+      "Creates passwords by encrypting FNV-1a hash of given identifier\n"
       "with Speck128/256 on the key passed in environmental variable CRYPTOLOCKER_PASSWORD.\n";
     return 0;
   }
@@ -328,13 +336,13 @@ int main(int argc, char** argv)
     hash *= fnv_prime;
   }
   d[0] = (uint64_t)hash;
-  hash >>= 64;
-  d[1] = (uint64_t)hash;
+  d[1] = (uint64_t)(hash >> 64);
 
   // Encrypt hashed input a thousand times
   for (unsigned i = 0; i < 1000; i++) {
     speck_encrypt(d, k);
   }
+  uint64_t elite_bits = d[1]; // Keep for elite password
 
   // Password is three words from the wordlist and one three digit number
   std::string buffer;
@@ -350,5 +358,22 @@ int main(int argc, char** argv)
   }
   buffer[0] = std::toupper(buffer[0]);
   std::cout << buffer << "\n";
+
+  // Elite password is generated like system names in Elite game,
+  // followed by a dash and a number between 1 and 99
+  buffer.clear();
+  int syllable_ct = ((elite_bits >> 21) & 1) ? 4 : 3;
+  for (int i = 0; i < syllable_ct; i++) {
+    buffer.append(elite_syllable_list[(elite_bits >> (i * 5)) & 0x1f]);
+  }
+  buffer[0] = std::toupper(buffer[0]);
+  buffer.append(1, '-');
+  unsigned suffix = (elite_bits >> 22) % 99 + 1;
+  if (suffix > 9) {
+    buffer.append(1, digits[suffix / 10]);
+  } 
+  buffer.append(1, digits[suffix % 10]);
+  std::cout << buffer << "\n";
+
   return 0;
 }
