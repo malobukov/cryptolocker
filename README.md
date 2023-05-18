@@ -40,13 +40,13 @@ The companion program <tt>password4</tt> creates passwords for a given site by e
 
 Alternatively this can be done in a browser like Firefox that supports BigInt by opening [https://malobukov.github.io/cryptolocker/password4.html](https://malobukov.github.io/cryptolocker/password4.html).
 
-FNV-1a is not cryptographically strong but it does not have to be because potential attacker cannot choose the input. We just want to use all of the input and spread it across 128 bits to avoid collisions (same output for different site identifiers).
-
 Passwords are converted to three words from an EFF word list followed by a three digit number, separated by dashes. First letter is capitalized. This should fulfill password length and complexity requirements of most web sites (uppercase, lowercase, special character, etc.)
 
 Total entropy is approximately 41 bits, an intentional compromize to make passwords easier to type. This also ensures brute forcing one password does not compromise all others, as only 41 of 256 bits of key entropy are affected.
 
-For low-security applications, a shorter password is created like [system name in Elite game](https://www.bbcelite.com/deep_dives/generating_system_names.html), followed by a dash and a number between 1 and 99. Total entropy of this short password is between 22 and 28 bits.
+A checkword is calculated from low bits of FNV-1a hash of seed, converted to text by an algoritmm for [system name in Elite game](https://www.bbcelite.com/deep_dives/generating_system_names.html). Checkword depends only on the seed and can be used to check it for typos.
+
+All input strings are treated as UTF-8 and hashed with FNV-1a. It is not a cryptographically strong algorithm, but it does not have to be. We just want to use all of the input and spread it across 128 bits for identifier or 256 bits for key.
 
 ## References
 

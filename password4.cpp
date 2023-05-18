@@ -272,14 +272,20 @@ speck_encrypt( uint64_t data[2]
   }
 }
 
-static uint64_t 
-bytes_to_uint64(const uint8_t bytes[], unsigned length)
+__uint128_t fnv1a_hash(const unsigned char* p, unsigned char mask = 0xff)
 {
-  uint64_t w = 0;
-  for (unsigned i = 0, shift = 0; i < length; i++, shift += 8) {
-    w |= ((uint64_t)bytes[i] << shift);
+  __uint128_t fnv_prime = 1; // FNV prime is 2**88 + 0x13b
+  fnv_prime <<= 88;
+  fnv_prime |= 0x13b;
+  __uint128_t hash = 0x6c62272e07bb0142; // FNV offset, higher bits
+  hash <<= 64;
+  hash |= 0x62b821756295c58d; // FNV offset, lower bits
+  while (*p) {
+    hash ^= ((*p) & mask);
+    hash *= fnv_prime;
+    p++;
   }
-  return w;
+  return hash;
 }
 
 int main(int argc, char** argv)
@@ -299,9 +305,21 @@ int main(int argc, char** argv)
                 << "Observed 0x" << observed[0] << ", 0x" << observed[1] << "\n";
        return 1;
     }
+    __uint128_t expected_hash = 0xd2d42892ede87203ULL;
+    expected_hash <<= 64;
+    expected_hash |= 0x1d2593366229c2d2ULL;
+    __uint128_t observed_hash = fnv1a_hash((unsigned char*)"Hello World!");
+    if (observed_hash != expected_hash) {
+      std::cerr << "fnv1a_hash() self-test failed\n"
+                << "Expected 0x" << std::hex << (uint64_t)(expected_hash >> 64)
+                << (uint64_t)(expected_hash) << "\n"
+                << "Observed 0x" << (uint64_t)(observed_hash >> 64)
+                << (uint64_t)(observed_hash) << "\n";
+      return 2;
+    }
     std::cerr << "Usage:\n\n\tpassword4 john.doe@example.com\n\n"
-      "Creates passwords by encrypting FNV-1a hash of given identifier\n"
-      "with Speck128/256 on the key passed in environmental variable CRYPTOLOCKER_PASSWORD.\n";
+      "Creates passwords by encrypting given identifier\n"
+      "on the seed passed in environmental variable CRYPTOLOCKER_PASSWORD.\n";
     return 0;
   }
 
@@ -309,32 +327,37 @@ int main(int argc, char** argv)
   const char* seed = std::getenv("CRYPTOLOCKER_PASSWORD");
   std::string seed_str;
   if (!seed) {
-    std::cerr << "Enter seed (32 chars max): ";
+    std::cerr << "Enter seed: ";
     std::getline (std::cin, seed_str);
     seed = seed_str.c_str();
   }
-  uint64_t k[4] = { 0 };
-  {
-    unsigned bytes_left = strlen(seed);
-    for (unsigned i = 0; i < 4; i++, bytes_left -= 8) {
-      k[i] = bytes_to_uint64((uint8_t*)(seed + i * 8), bytes_left > 8 ? 8 : bytes_left);
-      if (bytes_left <= 8) break;
-    }
+
+  // To get 256 bit long key from arbitrary length seed, run one FNV1a hash for even bits, 
+  // and another for odd bits 
+  __uint128_t even_hash = fnv1a_hash((unsigned char*)seed, 0x55);
+  __uint128_t odd_hash = fnv1a_hash((unsigned char*)seed, 0xaa);
+  uint64_t k[4];
+  k[0] = (uint64_t)even_hash;
+  k[1] = (uint64_t)odd_hash;
+  k[2] = (uint64_t)(even_hash >> 64);
+  k[3] = (uint64_t)(odd_hash >> 64);
+
+  // Checkword is a function of seed, generated like system names in Elite game
+  __uint128_t elite_bits = fnv1a_hash((unsigned char*)seed);
+  int syllable_ct = ((elite_bits >> 21) & 1) ? 4 : 3;
+  std::string checkword;
+  for (int i = 0; i < syllable_ct; i++) {
+    checkword.append(elite_syllable_list[(elite_bits >> (i * 5)) & 0x1f]);
   }
+  checkword[0] = std::toupper(checkword[0]);
+  std::cout << "Checkword: " << checkword << "\n";
 
   // Calculate FNV-1a hash of the input. Hash function does not have to be 
   // cryptographically strong because potential attacker cannot choose the input.
   // We just want to use all of the input and spread it across 128 bits to 
   // avoid collisions (same output for different inputs).
   uint64_t d[2] = { 0 };
-  __uint128_t fnv_prime = 1; // FNV prime is 2**88 + 0x13b
-  fnv_prime <<= 88;
-  fnv_prime |= 0x13b;
-  __uint128_t hash = fnv_prime;
-  for (unsigned char* p = (unsigned char*)(argv[1]); *p; p++) {
-    hash ^= *p;
-    hash *= fnv_prime;
-  }
+  __uint128_t hash = fnv1a_hash((unsigned char*)(argv[1]));
   d[0] = (uint64_t)hash;
   d[1] = (uint64_t)(hash >> 64);
 
@@ -342,38 +365,21 @@ int main(int argc, char** argv)
   for (unsigned i = 0; i < 1000; i++) {
     speck_encrypt(d, k);
   }
-  uint64_t elite_bits = d[1]; // Keep for elite password
 
   // Password is three words from the wordlist and one three digit number
-  std::string buffer;
+  std::string password;
   for (int i = 0; i < 3; i++) {
-    buffer.append(wordlist[d[1] % WORDLIST_LENGTH]);
+    password.append(wordlist[d[1] % WORDLIST_LENGTH]);
     d[1] /= WORDLIST_LENGTH;
-    buffer.append(1, '-');
+    password.append(1, '-');
   }
   const char* digits = "0123456789";
   for (int i = 0; i < 3; i++) {
-    buffer.append(1, digits[d[0] % 10]);
+    password.append(1, digits[d[0] % 10]);
     d[0] /= 10;
   }
-  buffer[0] = std::toupper(buffer[0]);
-  std::cout << buffer << "\n";
-
-  // Elite password is generated like system names in Elite game,
-  // followed by a dash and a number between 1 and 99
-  buffer.clear();
-  int syllable_ct = ((elite_bits >> 21) & 1) ? 4 : 3;
-  for (int i = 0; i < syllable_ct; i++) {
-    buffer.append(elite_syllable_list[(elite_bits >> (i * 5)) & 0x1f]);
-  }
-  buffer[0] = std::toupper(buffer[0]);
-  buffer.append(1, '-');
-  unsigned suffix = (elite_bits >> 22) % 99 + 1;
-  if (suffix > 9) {
-    buffer.append(1, digits[suffix / 10]);
-  } 
-  buffer.append(1, digits[suffix % 10]);
-  std::cout << buffer << "\n";
+  password[0] = std::toupper(password[0]);
+  std::cout << "Password: " << password << "\n";
 
   return 0;
 }

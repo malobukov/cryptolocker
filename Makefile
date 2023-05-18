@@ -19,7 +19,8 @@ test: cryptolocker password4
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./cryptolocker LICENSE.tmp2.encrypted
 	@echo Hashes of LICENSE, LICENSE.tmp1, and LICENSE.tmp2 should match
 	sha256sum LICENSE LICENSE.tmp1 LICENSE.tmp2
-	@echo The following command should produce Quill-pasta-dried-045 and Amaus-77
+	@echo The following command should produce checkword Tilausat and password Rich-envoy-pluck-069 
+ 
 	CRYPTOLOCKER_PASSWORD=fourwordsalluppercase ./password4 john.doe@example.com
 
 clean:
